@@ -1,0 +1,8 @@
+easyocr
+transformers
+sentencepiece
+pynput
+Pillow
+sacremoses
+# torch and torchvision are required but often best installed separately for GPU support. 
+# However, easyocr will try to pull them.
