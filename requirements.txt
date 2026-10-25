@@ -1,8 +1,11 @@
-easyocr
-transformers
+easyocr>=1.7
+transformers>=4.56
+huggingface_hub>=0.30
 sentencepiece
+sacremoses
 pynput
 Pillow
-sacremoses
-# torch and torchvision are required but often best installed separately for GPU support. 
-# However, easyocr will try to pull them.
+truststore
+# torch and torchvision are required but best installed separately for GPU support:
+# https://pytorch.org/get-started/locally/
+# (easyocr pulls a CPU-only build if torch is missing.)

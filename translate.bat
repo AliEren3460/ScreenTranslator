@@ -1,4 +1,4 @@
 @echo off
 set PYTHONPATH=%~dp0src
-python src/main.py
+python "%~dp0src\main.py"
 pause
