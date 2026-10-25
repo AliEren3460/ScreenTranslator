@@ -125,3 +125,9 @@ src/
   config.py      Ayar dosyası okuma/yazma
 translate.bat    Windows başlatıcısı
 ```
+
+## Lisans
+
+Bu projenin kodu [MIT lisansı](LICENSE) ile dağıtılır.
+
+Çeviri modelleri ve kütüphaneler kendi lisanslarına tabidir: [opus-mt-tc-big-en-tr](https://huggingface.co/Helsinki-NLP/opus-mt-tc-big-en-tr) (CC-BY 4.0), [Töz-Çevir-1](https://huggingface.co/TozAI/Toz-Cevir-1) (Apache-2.0), [EasyOCR](https://github.com/JaidedAI/EasyOCR) (Apache-2.0), [CTranslate2](https://github.com/OpenNMT/CTranslate2) (MIT).
