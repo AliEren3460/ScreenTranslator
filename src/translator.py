@@ -18,7 +18,7 @@ TOZ_MODEL = "TozAI/Toz-Cevir-1"
 # (repo id, description, approximate download size in GB)
 MODELS = [
     (OPUS_MODEL, "Hizli - GPU varsa GPU, yoksa CPU", 0.5),
-    (TOZ_MODEL, "En Iyi Kalite - CPU", 0.3),
+    (TOZ_MODEL, "En Iyi Kalite - GPU varsa GPU, yoksa CPU", 0.3),
 ]
 DEFAULT_MODEL = OPUS_MODEL
 
@@ -274,7 +274,7 @@ class Translator:
         self._lock = threading.Lock()
 
         if self.model_name == TOZ_MODEL:
-            self._load_toz()
+            self._load_toz(device)
         else:
             self._load_ct2(self._resolve_hf_model(), device)
 
@@ -290,16 +290,32 @@ class Translator:
         print(f"Yerel kopya bulunamadi: {self.model_name}")
         return download_model(self.model_name)
 
-    def _load_toz(self):
-        # Toz-Cevir decodes one sentence at a time; on CPU it is about as fast as on GPU
+    def _load_toz(self, device):
+        import torch
+        import tozcevir
+
         path = find_local_toz() or download_toz()
         print(f"Model yukleniyor: {path}")
+        self.backend = "toz"
+
+        if device in ("auto", "cuda"):
+            if torch.cuda.is_available():
+                try:
+                    self.toz = tozcevir.load(path, device="cuda")
+                    self._generate(["Test."])
+                    print("Ceviri modeli yuklendi (Toz-Cevir-1, GPU).")
+                    return
+                except Exception as e:
+                    if device == "cuda":
+                        raise ModelLoadError(f"Toz-Cevir GPU'da calistirilamadi: {e}")
+                    print(f"GPU kullanilamadi, CPU'ya geciliyor: {e}")
+            elif device == "cuda":
+                raise ModelLoadError("CUDA destekli GPU bulunamadi.")
+
         try:
-            import tozcevir
             self.toz = tozcevir.load(path, device="cpu")
         except Exception as e:
             raise ModelLoadError(f"Toz-Cevir yuklenemedi: {e}")
-        self.backend = "toz"
         print("Ceviri modeli yuklendi (Toz-Cevir-1, CPU).")
 
     def _load_ct2(self, hf_path, device):

@@ -54,7 +54,7 @@ Açılışta konsolda kısa bir ayar menüsü çıkar:
 ```
   Ceviri Modeli:
   1. Helsinki-NLP/opus-mt-tc-big-en-tr (Hizli - GPU varsa GPU, yoksa CPU) [indirilmis]
-  2. TozAI/Toz-Cevir-1 (En Iyi Kalite - CPU) [ilk kullanimda ~0.3 GB indirilecek]
+  2. TozAI/Toz-Cevir-1 (En Iyi Kalite - GPU varsa GPU, yoksa CPU) [ilk kullanimda ~0.3 GB indirilecek]
   3. Son Kullanilan: Helsinki-NLP/opus-mt-tc-big-en-tr
 ```
 
@@ -69,7 +69,7 @@ Ayarlar `src/translator_config.json` dosyasına kaydedilir. Çeviri ve OCR'ı GP
 | Model | Nasıl çalışır | Cümle başına | Bellek |
 |---|---|---|---|
 | `Helsinki-NLP/opus-mt-tc-big-en-tr` | [CTranslate2](https://github.com/OpenNMT/CTranslate2) int8, GPU varsa GPU | ~30 ms (GPU), ~135 ms (CPU) | ~0,5 GB VRAM |
-| [`TozAI/Toz-Cevir-1`](https://huggingface.co/TozAI/Toz-Cevir-1) | Kendi paketi, CPU | ~180 ms | GPU kullanmaz |
+| [`TozAI/Toz-Cevir-1`](https://huggingface.co/TozAI/Toz-Cevir-1) | Kendi paketi, GPU varsa GPU | ~85 ms (GPU), ~140 ms (CPU) | ~0,3 GB VRAM |
 
 İkisi de yalnızca İngilizce→Türkçe çeviri yapar. Bu yüzden 200 dilli NLLB modellerinden hem daha hızlı hem daha isabetlidir. RTX 3080 Ti Laptop üzerinde chrF++ puanları (yüksek olan daha iyi):
 
@@ -81,7 +81,7 @@ Ayarlar `src/translator_config.json` dosyasına kaydedilir. Çeviri ve OCR'ı GP
 | nllb-200-distilled-1.3B | 57,4 | 52,7 | 66,6 |
 | nllb-200-distilled-600M | 53,7 | 50,4 | 62,7 |
 
-Opus modeli ilk açılışta bir kez CTranslate2 biçimine dönüştürülür (birkaç saniye) ve `~/.cache/screentranslator` altında saklanır. GPU'da çalıştırılamazsa otomatik olarak işlemciye geçer.
+Opus modeli ilk açılışta bir kez CTranslate2 biçimine dönüştürülür (birkaç saniye) ve `~/.cache/screentranslator` altında saklanır. İki model de GPU'da çalıştırılamazsa otomatik olarak işlemciye geçer. Süreler kısa arayüz cümleleri içindir; uzun cümlelerde Töz-Çevir GPU'da ~330 ms, CPU'da ~950 ms sürer.
 
 Seçilen model önce bilgisayarda aranır:
 
