@@ -28,7 +28,7 @@ from config import load_config, update_config
 from sniper import Sniper
 from ui_overlay import ResultOverlay
 from ocr_engine import OCREngine
-from translator import Translator, MODELS, DEFAULT_MODEL, find_local_model
+from translator import Translator, MODELS, DEFAULT_MODEL, is_downloaded
 
 DEFAULT_HOTKEY = "ctrl+shift+t"
 KEY_ALIASES = {"control": "ctrl", "win": "cmd", "windows": "cmd", "escape": "esc", "return": "enter"}
@@ -64,7 +64,7 @@ def select_settings_cli():
     print("")
     print("  Ceviri Modeli:")
     for i, (repo_id, description, size_gb) in enumerate(MODELS, 1):
-        status = "indirilmis" if find_local_model(repo_id, deep=False) else f"ilk kullanimda ~{size_gb} GB indirilecek"
+        status = "indirilmis" if is_downloaded(repo_id) else f"ilk kullanimda ~{size_gb} GB indirilecek"
         print(f"  {i}. {repo_id} ({description}) [{status}]")
     print(f"  {len(MODELS) + 1}. Son Kullanilan: {last_model}")
     print("")
@@ -99,14 +99,15 @@ def select_settings_cli():
             print(f"Gecersiz kisayol: {hotkey}. Ornek: ctrl+shift+t, alt+t, ctrl+f5")
 
     update_config(ocr_languages=ocr_languages, hotkey=hotkey)
-    return model_name, ocr_languages, hotkey
+    return model_name, ocr_languages, hotkey, config.get("device", "auto")
 
 
 class ScreenTranslatorApp:
-    def __init__(self, selected_model_name=None, ocr_languages=None, hotkey=DEFAULT_HOTKEY):
+    def __init__(self, selected_model_name=None, ocr_languages=None, hotkey=DEFAULT_HOTKEY, device="auto"):
         self.selected_model_name = selected_model_name or DEFAULT_MODEL
         self.ocr_languages = ocr_languages or ["en"]
         self.hotkey = hotkey
+        self.device = device
         self.current_overlay = None
         self.sniper = None
 
@@ -144,8 +145,8 @@ class ScreenTranslatorApp:
         print("Modeller arka planda yukleniyor...")
         try:
             if self.ocr_engine is None:
-                self.ocr_engine = OCREngine(languages=self.ocr_languages, gpu=True)
-            self.translator = Translator(model_name=model_name)
+                self.ocr_engine = OCREngine(languages=self.ocr_languages, gpu=self.device != "cpu")
+            self.translator = Translator(model_name=model_name, device=self.device)
             update_config(model=model_name)
             self.queue.put(("MODELS_READY",))
         except Exception as e:
@@ -242,6 +243,6 @@ class ScreenTranslatorApp:
 
 
 if __name__ == "__main__":
-    model, ocr_langs, hk = select_settings_cli()
-    app = ScreenTranslatorApp(model, ocr_langs, hk)
+    model, ocr_langs, hk, device = select_settings_cli()
+    app = ScreenTranslatorApp(model, ocr_langs, hk, device)
     app.run()

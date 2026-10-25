@@ -1,6 +1,8 @@
 easyocr>=1.7
 transformers>=4.56
 huggingface_hub>=0.30
+ctranslate2>=4.5
+tozcevir @ git+https://github.com/Toz-AI/toz-cevir.git@8edce2037dc7a9611d07e1f693feaccf471e77cc
 sentencepiece
 sacremoses
 pynput
@@ -9,3 +11,6 @@ truststore
 # torch and torchvision are required but best installed separately for GPU support:
 # https://pytorch.org/get-started/locally/
 # (easyocr pulls a CPU-only build if torch is missing.)
+#
+# CTranslate2 runs on the GPU with cuBLAS 12. CUDA 12 builds of torch ship it;
+# with a CUDA 11 build install it separately:  pip install nvidia-cublas-cu12

@@ -1,24 +1,29 @@
+import hashlib
 import json
 import os
 import re
+import shutil
+import site
 import threading
 
-import torch
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.utils import RepositoryNotFoundError
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 from config import CONFIG_DIR
 
+OPUS_MODEL = "Helsinki-NLP/opus-mt-tc-big-en-tr"
+TOZ_MODEL = "TozAI/Toz-Cevir-1"
+
 # (repo id, description, approximate download size in GB)
 MODELS = [
-    ("Helsinki-NLP/opus-mt-tc-big-en-tr", "Hizli, Standart", 0.5),
-    ("facebook/nllb-200-distilled-600M", "Daha Iyi Kalite", 2.5),
-    ("facebook/nllb-200-distilled-1.3B", "Yuksek Kalite - AGIR", 5.5),
-    ("facebook/nllb-200-3.3B", "En Iyi Kalite - COK AGIR", 17.6),
+    (OPUS_MODEL, "Hizli - GPU varsa GPU, yoksa CPU", 0.5),
+    (TOZ_MODEL, "En Iyi Kalite - CPU", 0.3),
 ]
-DEFAULT_MODEL = MODELS[0][0]
+DEFAULT_MODEL = OPUS_MODEL
+
+TOZ_FILES = ["toz-cevir.pt", "tokenizer.model"]
+CT2_CACHE = os.path.join(os.path.expanduser("~"), ".cache", "screentranslator", "ct2")
 
 NLLB_SRC_LANG = "eng_Latn"
 NLLB_TGT_LANG = "tur_Latn"
@@ -116,8 +121,8 @@ def _extra_search_dirs():
 
 
 def _scan_dir_for_model(base, repo_id, max_depth=4):
-    """Find a folder under `base` named like the model (e.g. "nllb-200-distilled-600M"
-    or "models--facebook--nllb-200-distilled-600M") that holds a complete model."""
+    """Find a folder under `base` named like the model (e.g. "opus-mt-tc-big-en-tr"
+    or "models--Helsinki-NLP--opus-mt-tc-big-en-tr") that holds a complete model."""
     names = {repo_id.split("/")[-1].lower(), _cache_folder_name(repo_id).lower()}
     base_depth = base.rstrip(os.sep).count(os.sep)
     try:
@@ -152,18 +157,33 @@ def find_local_model(name, deep=True):
     return None
 
 
-def download_model(repo_id):
-    """Download only the files needed to run `repo_id` into the HF cache and
-    return the local folder. Interrupted downloads are resumed."""
+def find_local_toz():
     try:
-        info = HfApi().model_info(repo_id, files_metadata=True, token=False)
+        path = snapshot_download(TOZ_MODEL, allow_patterns=TOZ_FILES, local_files_only=True)
+    except Exception:
+        return None
+    return path if all(os.path.isfile(os.path.join(path, f)) for f in TOZ_FILES) else None
+
+
+def is_downloaded(name):
+    """Fast check for the settings menu (no folder scanning)."""
+    return bool(find_local_toz() if name == TOZ_MODEL else find_local_model(name, deep=False))
+
+
+def _repo_info(repo_id):
+    try:
+        return HfApi().model_info(repo_id, files_metadata=True, token=False)
     except RepositoryNotFoundError:
         raise ModelLoadError(
             f"'{repo_id}' HuggingFace'te bulunamadi (adi yanlis veya model kaldirilmis).")
     except Exception as e:
         raise ModelLoadError(f"HuggingFace'e baglanilamadi, internet baglantinizi kontrol edin. ({e})")
 
-    files = {s.rfilename: (s.size or 0) for s in info.siblings}
+
+def download_model(repo_id):
+    """Download only the files needed to run `repo_id` into the HF cache and
+    return the local folder. Interrupted downloads are resumed."""
+    files = {s.rfilename: (s.size or 0) for s in _repo_info(repo_id).siblings}
     # Prefer safetensors; fall back to .bin. Never download both.
     for pattern, ignore in WEIGHT_FORMATS:
         weights = [f for f in files if pattern.match(f)]
@@ -189,50 +209,132 @@ def download_model(repo_id):
     return path
 
 
+def download_toz():
+    _repo_info(TOZ_MODEL)
+    print(f"Model indiriliyor: {TOZ_MODEL} (~0.3 GB)")
+    try:
+        path = snapshot_download(TOZ_MODEL, allow_patterns=TOZ_FILES, token=False)
+    except Exception as e:
+        raise ModelLoadError(f"Indirme basarisiz: {e}")
+    if not all(os.path.isfile(os.path.join(path, f)) for f in TOZ_FILES):
+        raise ModelLoadError(f"Indirme tamamlandi ama model dosyalari eksik: {path}")
+    return path
+
+
+def ensure_ct2_model(hf_path):
+    """Convert a HuggingFace model folder to CTranslate2 int8 once and return
+    the converted folder. Conversion takes a few seconds and needs torch."""
+    key = hashlib.sha1(os.path.abspath(hf_path).lower().encode()).hexdigest()[:12]
+    out = os.path.join(CT2_CACHE, f"{os.path.basename(hf_path.rstrip(os.sep))}-{key}")
+    if os.path.isfile(os.path.join(out, "model.bin")):
+        return out
+
+    print("Model hizli calisma bicimine (CTranslate2 int8) donusturuluyor, bu bir kez yapilir...")
+    from ctranslate2.converters import TransformersConverter
+    tmp = out + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        TransformersConverter(hf_path).convert(tmp, quantization="int8", force=True)
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise ModelLoadError(f"Model donusturulemedi ({hf_path}): {e}")
+    os.replace(tmp, out)
+    return out
+
+
+def _add_cuda_dll_dirs():
+    """CTranslate2 needs cuBLAS 12. On Windows it comes from the nvidia-cublas-cu12
+    package or a CUDA 12 build of torch; make both findable."""
+    if os.name != "nt":
+        return
+    dirs = [os.path.join(p, "nvidia", "cublas", "bin") for p in site.getsitepackages()]
+    try:
+        import torch
+        dirs.append(os.path.join(os.path.dirname(torch.__file__), "lib"))
+    except ImportError:
+        pass
+    for d in dirs:
+        if os.path.isdir(d):
+            os.add_dll_directory(d)
+            os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
+
+
 def split_sentences(text):
     return [s for s in SENTENCE_SPLIT.split(text.strip()) if s]
 
 
 class Translator:
-    def __init__(self, model_name=None):
+    def __init__(self, model_name=None, device="auto"):
         """
-        model_name: a HuggingFace repo id (see MODELS) or a local model folder.
+        model_name: TOZ_MODEL, a HuggingFace seq2seq repo id or a local model folder.
+        device: "auto" (GPU if it works, else CPU), "cuda" or "cpu".
         Raises ModelLoadError if the model can not be found, downloaded or loaded.
         """
         self.model_name = model_name or DEFAULT_MODEL
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        # Half precision halves VRAM use (nllb-3.3B: ~13 GB -> ~6.6 GB)
-        self.dtype = torch.float16 if self.device == "cuda" else torch.float32
         self._lock = threading.Lock()
-        print(f"Cihaz: {self.device}")
 
+        if self.model_name == TOZ_MODEL:
+            self._load_toz()
+        else:
+            self._load_ct2(self._resolve_hf_model(), device)
+
+    def _resolve_hf_model(self):
         path = find_local_model(self.model_name)
         if path:
             print(f"Yerel model bulundu: {path}")
-        elif os.path.isdir(self.model_name):
+            return path
+        if os.path.isdir(self.model_name):
             raise ModelLoadError(
                 f"Secilen klasorde eksiksiz bir model yok: {self.model_name}\n"
                 "(config.json, tokenizer ve agirlik dosyalari gerekli)")
-        else:
-            print(f"Yerel kopya bulunamadi: {self.model_name}")
-            path = download_model(self.model_name)
+        print(f"Yerel kopya bulunamadi: {self.model_name}")
+        return download_model(self.model_name)
 
-        self._load(path)
-
-    def _load(self, path):
+    def _load_toz(self):
+        # Toz-Cevir decodes one sentence at a time; on CPU it is about as fast as on GPU
+        path = find_local_toz() or download_toz()
         print(f"Model yukleniyor: {path}")
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                path, local_files_only=True, dtype=self.dtype).to(self.device).eval()
+            import tozcevir
+            self.toz = tozcevir.load(path, device="cpu")
         except Exception as e:
-            raise ModelLoadError(f"Model dosyalari yuklenemedi ({path}): {e}")
+            raise ModelLoadError(f"Toz-Cevir yuklenemedi: {e}")
+        self.backend = "toz"
+        print("Ceviri modeli yuklendi (Toz-Cevir-1, CPU).")
 
-        self.is_nllb = self.model.config.model_type == "m2m_100" and NLLB_TGT_LANG in self.tokenizer.get_vocab()
+    def _load_ct2(self, hf_path, device):
+        import ctranslate2
+        from transformers import AutoConfig, AutoTokenizer
+
+        try:
+            model_type = AutoConfig.from_pretrained(hf_path, local_files_only=True).model_type
+            self.tokenizer = AutoTokenizer.from_pretrained(hf_path, local_files_only=True)
+        except Exception as e:
+            raise ModelLoadError(f"Model dosyalari yuklenemedi ({hf_path}): {e}")
+        self.is_nllb = model_type == "m2m_100" and NLLB_TGT_LANG in self.tokenizer.get_vocab()
         if self.is_nllb:
             self.tokenizer.src_lang = NLLB_SRC_LANG
-            self.forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(NLLB_TGT_LANG)
-        print(f"Ceviri modeli yuklendi ({'NLLB' if self.is_nllb else self.model.config.model_type}).")
+        ct2_path = ensure_ct2_model(hf_path)
+        self.backend = "ct2"
+
+        if device in ("auto", "cuda"):
+            _add_cuda_dll_dirs()
+            if ctranslate2.get_cuda_device_count() > 0:
+                try:
+                    self.model = ctranslate2.Translator(ct2_path, device="cuda", compute_type="int8_float16")
+                    self._generate(["Test."])  # cuBLAS is only loaded on first use
+                    print(f"Ceviri modeli yuklendi ({model_type}, GPU).")
+                    return
+                except Exception as e:
+                    if device == "cuda":
+                        raise ModelLoadError(f"Model GPU'da calistirilamadi: {e}")
+                    print(f"GPU kullanilamadi, CPU'ya geciliyor: {e}")
+            elif device == "cuda":
+                raise ModelLoadError("CUDA destekli GPU bulunamadi.")
+
+        self.model = ctranslate2.Translator(ct2_path, device="cpu", compute_type="int8",
+                                            intra_threads=os.cpu_count() or 4)
+        print(f"Ceviri modeli yuklendi ({model_type}, CPU).")
 
     def translate(self, text, batch_size=16):
         """Translate a string or a list of paragraphs. Each paragraph is split
@@ -264,11 +366,17 @@ class Translator:
             pos += n
         return "\n".join(lines)
 
-    @torch.inference_mode()
     def _generate(self, batch):
-        inputs = self.tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(self.device)
-        kwargs = {"max_new_tokens": 256, "num_beams": 4}
-        if self.is_nllb:
-            kwargs["forced_bos_token_id"] = self.forced_bos_token_id
-        tokens = self.model.generate(**inputs, **kwargs)
-        return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
+        if self.backend == "toz":
+            return [self.toz.translate(s, to="tr", beam=4, split=False) for s in batch]
+
+        source = [self.tokenizer.convert_ids_to_tokens(self.tokenizer.encode(s)) for s in batch]
+        prefix = [[NLLB_TGT_LANG]] * len(source) if self.is_nllb else None
+        results = self.model.translate_batch(source, target_prefix=prefix, beam_size=4,
+                                             max_decoding_length=256)
+        out = []
+        for r in results:
+            tokens = r.hypotheses[0][1:] if self.is_nllb else r.hypotheses[0]
+            out.append(self.tokenizer.decode(self.tokenizer.convert_tokens_to_ids(tokens),
+                                             skip_special_tokens=True))
+        return out
